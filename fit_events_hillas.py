@@ -12,7 +12,7 @@ from matplotlib import cm
 
 from astropy import units as u
 from astropy.table import Table
-eps_table = Table(names=("Eps_w", "Eps_t", "diff_Eps", "sig_w", "sig_t", "sig_p"))
+eps_table = Table(names=("Eps_w", "Eps_t", "diff_Eps", "sig_w", "sig_t", "sig_p", "Event_id", "Tel_id"))
 
 
 from ctapipe.io.camera import CameraGeometry
@@ -175,9 +175,14 @@ if __name__ == '__main__':
 
                 sum_cleaned_2 = np.sum(pmt_signal_2)
                 Epsilon_intensity_2 = abs(sum_cleaned_2 - sum_signal) / sum_signal
-                eps_table.add_row([Epsilon_intensity, Epsilon_intensity_2,
+                eps_table.add_row([Epsilon_intensity,
+                                   Epsilon_intensity_2,
                                    Epsilon_intensity - Epsilon_intensity_2,
-                                   sum_cleaned, sum_cleaned_2, sum_signal])
+                                   sum_cleaned,
+                                   sum_cleaned_2,
+                                   sum_signal,
+                                   event.dl0.event_id,
+                                   tel_id])
                 continue
 
                 #from ctapipe.visualization import CameraDisplay
