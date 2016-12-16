@@ -56,6 +56,10 @@ if __name__ == '__main__':
     parser = make_argparser()
     parser.add_argument('--proton',  action='store_true',
                         help="do protons instead of gammas")
+    parser.add_argument('--add_offset', action='store_true',
+                        help="adds a 15 PE offset to all pixels to supress 'Nbr < 0' "
+                             "warnings from mrfilter")
+
     args = parser.parse_args()
 
     if args.proton:
@@ -75,7 +79,7 @@ if __name__ == '__main__':
     Eventcutflow = CutFlow("EventCutFlow")
     Imagecutflow = CutFlow("ImageCutFlow")
 
-    min_charge = "min_charge {}".format(args.min_charge)
+    min_charge = "min_charge_>{}".format(args.min_charge)
     Imagecutflow.set_cut(min_charge, lambda x: x > args.min_charge)
 
 
@@ -91,11 +95,13 @@ if __name__ == '__main__':
 
     NTels = []
     EnMC  = []
-    xis1  = []
     xis2  = []
-    xisd  = []
-
     diffs = []
+
+    xis1_sorted  = []
+    xis2_sorted  = []
+    xisd_sorted  = []
+    diffs_sorted = []
 
     tel_signal = []
     tel_signal_pe = []
@@ -157,56 +163,11 @@ if __name__ == '__main__':
 
                 try:
                     pmt_signal, new_geom = \
-                        Cleaner.clean(cal_signal, cam_geom[tel_id],
-                                      event.inst.optical_foclen[tel_id])
-                    pmt_signal_2 = \
-                        Cleaner.clean_tail(cal_signal, cam_geom[tel_id],
-                                           event.inst.optical_foclen[tel_id])[0]
-                except FileNotFoundError as e:
+                        Cleaner.clean(cal_signal+5 if args.add_offset else cal_signal,
+                                      cam_geom[tel_id], event.inst.optical_foclen[tel_id])
+                except (FileNotFoundError, EdgeEventException) as e:
                     print(e)
                     continue
-                except EdgeEventException:
-                    continue
-
-
-                sum_cleaned = np.sum(pmt_signal)
-                sum_signal = np.sum(event.mc.tel[tel_id].photo_electron_image)
-                Epsilon_intensity = abs(sum_cleaned - sum_signal) / sum_signal
-
-                sum_cleaned_2 = np.sum(pmt_signal_2)
-                Epsilon_intensity_2 = abs(sum_cleaned_2 - sum_signal) / sum_signal
-                eps_table.add_row([Epsilon_intensity,
-                                   Epsilon_intensity_2,
-                                   Epsilon_intensity - Epsilon_intensity_2,
-                                   sum_cleaned,
-                                   sum_cleaned_2,
-                                   sum_signal,
-                                   event.dl0.event_id,
-                                   tel_id])
-                continue
-
-                #from ctapipe.visualization import CameraDisplay
-                #fig = plt.figure()
-                #plt.style.use('seaborn-talk')
-
-                #ax2 = fig.add_subplot(121)
-                #disp2 = CameraDisplay(cam_geom[tel_id],
-                                      #image=event.dl0.tel[tel_id].adc_sums[0],
-                                      #ax=ax2)
-                #disp2.cmap = plt.cm.hot
-                #disp2.add_colorbar()
-
-                #ax1 = fig.add_subplot(122)
-                #disp1 = CameraDisplay(new_geom,
-                                      #image=np.sum(pmt_signal, axis=1)
-                                      #if pmt_signal.shape[-1] == 25 else pmt_signal,
-                                      #ax=ax1)
-                #disp1.cmap = plt.cm.hot
-                #disp1.add_colorbar()
-                #plt.title("Camera {}".format(tel_id))
-                #plt.suptitle("{} mode".format(args.mode))
-                #plt.show()
-
 
                 if not Imagecutflow.cut(min_charge, np.sum(pmt_signal)):
                     continue
@@ -268,28 +229,32 @@ if __name__ == '__main__':
             print("xi2 = {}".format(xi2))
             print("x1-xi2 = {}".format(xi1-xi2))
 
-            insort(xis1, xi1)
-            insort(xis2, xi2)
-            insort(xisd, xi1-xi2)
+            insort(xis1_sorted, xi1)
+            insort(xis2_sorted, xi2)
+            insort(xisd_sorted, xi1-xi2)
 
-            NEvents = len(xis2)
+            NEvents = len(xis2_sorted)
             print()
             print("xi1 res (68-percentile) = {}"
-                  .format(xis1[int(NEvents*.68)]))
+                  .format(xis1_sorted[int(NEvents*.68)]))
             print("xi2 res (68-percentile) = {}"
-                  .format(xis2[int(NEvents*.68)]))
-            print("median difference = {}".format(xisd[NEvents//2]))
+                  .format(xis2_sorted[int(NEvents*.68)]))
+            print("median difference = {}".format(xisd_sorted[NEvents//2]))
             print()
 
             diff = length(pos_fit[:2]-shower_core)
             print("reco = ", diff)
-            insort(diffs, diff)
+            insort(diffs_sorted, diff)
             print("core res (68-percentile) = {}"
-                  .format(diffs[int(len(diffs)*.68)]))
+                  .format(diffs_sorted[int(len(diffs_sorted)*.68)]))
             print()
             print("Events:", NEvents)
             print()
 
+            '''
+            save reco performance unsorted '''
+            xis2.append(xi2)
+            diffs.append(diff)
             '''
             save number of telescopes and MC energy for this event '''
             NTels.append(len(fit.circles))
@@ -303,34 +268,32 @@ if __name__ == '__main__':
     print()
     Eventcutflow("min2Tels")
     print()
-    Imagecutflow()
+    Imagecutflow(sort_column=1)
 
-    print(eps_table)
-
-    eps_table.write("Eps_int_comparison.fits", overwrite=True)
-
-    plot_hex_and_violin(
-            np.log10(eps_table["Eps_w"]),
-            np.log10(eps_table["sig_p"]),
-            None,
-            ylabel="log10(NPE)",
-            xlabel="log10(Eps2 wave)",
-            zlabel="log10(counts)",
-            bins='log',
-            extent=(-3, 0, 1.5, 5),
-            do_violin=False)
-    plt.pause(.1)
-    plot_hex_and_violin(
-            np.log10(eps_table["Eps_t"]),
-            np.log10(eps_table["sig_p"]),
-            None,
-            ylabel="log10(NPE)",
-            xlabel="log10(Eps2 tail)",
-            zlabel="log10(counts)",
-            bins='log',
-            extent=(-3, 0, 1.5, 5),
-            do_violin=False)
-    plt.show()
+    #print(eps_table)
+    #eps_table.write("Eps_int_comparison.fits", overwrite=True)
+    #plot_hex_and_violin(
+            #np.log10(eps_table["Eps_w"]),
+            #np.log10(eps_table["sig_p"]),
+            #None,
+            #ylabel="log10(NPE)",
+            #xlabel="log10(Eps2 wave)",
+            #zlabel="log10(counts)",
+            #bins='log',
+            #extent=(-3, 0, 1.5, 5),
+            #do_violin=False)
+    #plt.pause(.1)
+    #plot_hex_and_violin(
+            #np.log10(eps_table["Eps_t"]),
+            #np.log10(eps_table["sig_p"]),
+            #None,
+            #ylabel="log10(NPE)",
+            #xlabel="log10(Eps2 tail)",
+            #zlabel="log10(counts)",
+            #bins='log',
+            #extent=(-3, 0, 1.5, 5),
+            #do_violin=False)
+    #plt.show()
 
     '''
     if we don't want to plot anything, we can exit now '''
@@ -344,6 +307,7 @@ if __name__ == '__main__':
     '''
     plot the angular error of the hillas ellipsis vs the number of photo electrons '''
     npe_edges = np.linspace(1, 6, 21)
+    print(npe_edges)
     plot_hex_and_violin(np.log10(tel_signal_pe),
                         np.log10(hillas_tilt/angle_unit),
                         npe_edges,
@@ -357,7 +321,7 @@ if __name__ == '__main__':
 
     '''
     plot the angular error of the hillas ellipsis vs the measured signal on the camera '''
-    size_edges = np.linspace(1, 6, 21)
+    size_edges = npe_edges
     plot_hex_and_violin(np.log10(tel_signal),
                         np.log10(hillas_tilt/angle_unit),
                         size_edges,

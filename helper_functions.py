@@ -14,6 +14,7 @@ class SignalHandler():
     '''
     def __init__(self):
         self.stop = False
+        self.draw = True
 
     def __call__(self, signal, frame):
         if self.stop:
@@ -22,6 +23,20 @@ class SignalHandler():
         print('you pressed Ctrl+C!')
         print('exiting after current event')
         self.stop = True
+
+    def stop_drawing(self, signal, frame):
+        if self.stop:
+            print('you pressed Ctrl+C again -- exiting NOW')
+            exit(-1)
+
+        if self.draw:
+            print('you pressed Ctrl+C!')
+            print('turn off drawing')
+            self.draw = False
+        else:
+            print('you pressed Ctrl+C!')
+            print('exiting after current event')
+            self.stop = True
 
 
 def apply_mc_calibration_ASTRI(adcs, gains, peds, mode=0, adc_tresh=3500):
@@ -55,8 +70,11 @@ def apply_mc_calibration(adcs, gains, peds):
 
 
 def convert_astropy_array(arr, unit=None):
-    if unit is None: unit = arr[0].unit
-    return (np.array([a.to(unit).value for a in arr])*unit).si
+    if unit is None:
+        unit = arr[0].unit
+        return (np.array([a.to(unit).value for a in arr])*unit).si
+    else:
+        return np.array([a.to(unit).value for a in arr])*unit
 
 
 import argparse
@@ -183,6 +201,8 @@ def plot_hex_and_violin(abscissa, ordinate, bin_edges, extent=None, vmin=None, v
         lower and upper caps of the bin values to be plotted in plt.hexbin
     xlabel, ylabel : strings (defaults: "")
         labels for the two axes of either plot
+    zlabel : string (default: "")
+        label for the colorbar of the hexbin plot
     do_hex, do_violin : bools (defaults: True)
         whether or not to do the respective plots
     cm : colour map (default: plt.cm.hot)
@@ -254,5 +274,12 @@ def plot_hex_and_violin(abscissa, ordinate, bin_edges, extent=None, vmin=None, v
                        showextrema=True, showmedians=True)
         plt.xlabel(xlabel)
         plt.ylabel(ylabel)
+        ''' adding a colour bar to tex hexbin plot reduces its total width to 4/5
+        adjusting the extent of the violin plot to sync up with the hexbin plot '''
+        if not np.isnan(extent[:2]).any():
+            plt.xlim([extent[0], (5.*extent[1] - extent[0])/4.])
+        ''' for good measure also sync the vertical extent '''
+        if not np.isnan(extent[2:]).any():
+            plt.ylim(extent[2:])
         plt.grid()
 

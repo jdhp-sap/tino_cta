@@ -69,24 +69,23 @@ def kill_isolpix(array, plot=False):
 
 class ImageCleaner:
 
-    def __init__(self, old=False, mode="wave", dilate=False, island_cleaning=True,
+    def __init__(self, mode="wave", dilate=False, island_cleaning=True,
                  skip_edge_events=True, cutflow=CutFlow("ImageCleaner")):
         self.mode = mode
         self.dilate = dilate
         self.skip_edge_events = skip_edge_events
-        self.wave_out_name = "/tmp/wavelet_{}_".format(random())
         self.wavelet_transform = WaveletTransform()
         self.cutflow = cutflow
 
-        if self.mode == "wave":
-            self.clean = self.clean_wave
-        elif self.mode == "tail":
-            self.clean = self.clean_tail
-        elif self.mode == "none":
+        if mode is None:
             self.clean = self.clean_none
+        elif mode == "wave":
+            self.clean = self.clean_wave
+        elif mode == "tail":
+            self.clean = self.clean_tail
         else:
             raise UnknownModeException(
-                'cleaning mode "{}" not found'.format(self.mode))
+                'cleaning mode "{}" not found'.format(mode))
 
         if island_cleaning:
             self.island_cleaning = kill_isolpix
@@ -100,7 +99,8 @@ class ImageCleaner:
     def clean_wave(self, img, cam_geom, foclen):
         if cam_geom.cam_id == "ASTRI":
             cropped_img = crop_astri_image(img)
-            cleaned_img = self.wavelet_transform.clean_image(cropped_img, raw_option_string="-K -k -C1 -m3 -s3 -n4")
+            cleaned_img = self.wavelet_transform.clean_image(
+                            cropped_img, raw_option_string="-K -k -C1 -m3 -s3 -n4")
 
             self.cutflow.count("wavelet cleaning")
 
@@ -121,6 +121,7 @@ class ImageCleaner:
             new_geom = copy(cam_geom)
             new_geom.pix_x = crop_astri_image(cam_geom.pix_x).flatten()
             new_geom.pix_y = crop_astri_image(cam_geom.pix_y).flatten()
+            new_geom.pix_area = np.ones_like(new_img) * cam_geom.pix_area[0]
 
         elif cam_geom.pix_type.startswith("hex"):
             try:
