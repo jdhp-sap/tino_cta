@@ -12,7 +12,7 @@ for Protons in an energy range from 0.1 TeV to 600 TeV as a diffuse flux 6° aro
 pointing direction.
 
 ## Reconstruction Workflow
-The reconstruction is done by the `FitGammaHillas` class that was already merged into
+The reconstruction is done by the `FitGammaHillas` class that has already been merged into
 ctapipe. <br  />
 Only events with at least 2 telescopes are considered.<br  />
 
@@ -49,17 +49,20 @@ The position of the image core (x and y) and the tilt of the Hillas ellipsis (`�
 From these parameters (position `c` and tilt `ψ`), a second position, `b`, on the camera
 can be calculated. Both these points should lie on the shower axis. <br  />
 
+![shower_reco_camera_frame](https://cloud.githubusercontent.com/assets/18286015/21807318/75c52498-d73e-11e6-868a-c1a7d4413a49.png)
+
 #### GreatCircle
 The two positions on the camera correspond to two directions in the sky. These two
 directions define a plane (or `GreatCircle`) in the horizontal frame.
 Since the shower on the image passes through the two points `c` and `b` on the camera,
 the shower should also lie in the plane of the `GreatCircle`. <br  />
+The distribution of the angle between the shower and the `GreatCircle` can be seen in the following figure:
+
 
 #### Direction Reconstruction
 Two cameras will see the shower from different directions. The `GreatCircle` defined by
 their image will in most cases not be parallel, though the shower direction should lie
-in either of the planes. Therefore, the shower direction should be the orientation of the
-cross section of two planes. <br  />
+in both planes. Therefore, the shower direction should be the orientation of the cross section of two planes. <br  />
 If more than two telescopes observe the shower, every unique pair of telescopes provides
 an estimator of the cross section. All direction estimators get summed (while normalised
 to a length of 1) with a weight provided by:
@@ -67,20 +70,35 @@ to a length of 1) with a weight provided by:
 * the total size of each cleaned image of the two cameras used for the two `GreatCircle`
 * the ratios of the Hillas length and width from the two cameras.
 
-#### Shower Core Reconstruction
-For the impact position, the `trace` of each `GreatCircle` is defined as the cross section
-of itself with the horizontal plane. The impact position is estimated by minimising the
-sum of the distances to each `trace` with a modified χ² estimator:
-```
-sum_dist = 0.
-for circle in circles.values():
-    D = core_estimate-circle.pos
+![shower_reco_horizontal_frame](https://cloud.githubusercontent.com/assets/18286015/21807321/780f10a6-d73e-11e6-8e8b-1f616c31c9fd.png)
 
-    dist = 2*np.sqrt(1+(D[0]*circle.trace[1] -
-                        D[1]*circle.trace[0])**2) - 2
-    sum_dist += dist * circle.weight
-return sum_dist
-```
+#### Shower Core Reconstruction
+For the impact position, the normal vector of the `trace` on the ground of each
+`GreatCircle` is defined as the the `GreatCircle`'s normal vector with the z component set
+to zero. Again, for ever `GreatCircle` the shower should lie in the circle and hit the
+ground where the `GreatCircle` crosses the ground, too. That means: The shower's impact
+position is somewhere on the trace. Since this is true for all traces, the shower core
+position `(x, y)` ought to lie where all the traces cross. This is can be expressed with
+an equation system in matrix form:
+![full_equation_system](https://cloud.githubusercontent.com/assets/18286015/25378070/9071d94a-29a9-11e7-9026-370dabd31625.png)
+
+or <br  />
+<img src="https://cloud.githubusercontent.com/assets/18286015/25378068/9070c08c-29a9-11e7-88ed-32f5b41e7a1f.png" height=50px>,
+
+where <img src="https://cloud.githubusercontent.com/assets/18286015/25378071/90723066-29a9-11e7-90ee-33db7ea3c356.png" height=25px>
+is the normal vector of the trace of telescope i and
+<img src="https://cloud.githubusercontent.com/assets/18286015/25378072/90792bb4-29a9-11e7-957c-c6e70ff7d681.png" height=25px>
+is the position of telescope i. <br  />
+
+Since we do not live in a perfect world and there probably is no point `(x, y)` that
+fulfils this equation system, it is solved by the method of least linear square:
+
+![rchisq_eq](https://cloud.githubusercontent.com/assets/18286015/25378074/909b69c2-29a9-11e7-8036-271fd7adcbda.png)
+
+
+<img src="https://cloud.githubusercontent.com/assets/18286015/25378073/9082ee56-29a9-11e7-9772-2372cbebaa14.png" height=25px> minimises the
+squared difference of
+<img src="https://cloud.githubusercontent.com/assets/18286015/25378069/907195b6-29a9-11e7-8582-2004977288e0.png" height=25px>;
 with weights like the parameters in last two points from the enumeration above.
 
 

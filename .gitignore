@@ -2,6 +2,26 @@
 *.fits
 *.log
 *~
-data/
-plots/
+data
+plots
+
 __pycache__
+.cache
+
+
+# GRID stuff:
+# zipped modules to upload to input sandbox
+datapipe.tar.gz
+modules.tar.gz
+
+# hard-linked file from Jeremie's repo to more easily upload it to the GIRD
+extract_and_crop_simtel_images.py
+# a reminder file so I don't delete the .py
+extract_and_crop_simtel_images.txt
+
+# downloaded OutputSandbox
+# (directory name is the run ID, which starts with 12 atm)
+12*/
+
+# file lists on the GRID storage system
+vo.*

@@ -14,6 +14,9 @@ from astropy import units as u
 
 from ctapipe.io.hessio import hessio_event_source
 
+import sys
+sys.path.append("/local/home/tmichael/software/tino_cta/")
+from helper_functions import *
 
 import signal
 stop = None
@@ -27,23 +30,6 @@ def signal_handler(signal, frame):
     stop = True
 signal.signal(signal.SIGINT, signal_handler)
 
-import pyhessio
-def apply_mc_calibration_ASTRI(adcs, tel_id, mode=0, adc_tresh=3500):
-    """
-    apply basic calibration
-    """
-    peds0 = pyhessio.get_pedestal(tel_id)[0]
-    peds1 = pyhessio.get_pedestal(tel_id)[1]
-    gains0 = pyhessio.get_calibration(tel_id)[0]
-    gains1 = pyhessio.get_calibration(tel_id)[1]
-
-
-    if mode == 0:
-        calibrated = [ (adc0- 971)*gain0 if adc0 < adc_tresh else (adc1- 961)*gain1 for adc0, adc1, gain0, gain1 in zip(adcs[0], adcs[1], gains0,gains1) ]
-    else:
-        calibrated = [ (adc0-ped0)*gain0 if adc0 < adc_tresh else (adc1-ped1)*gain1 for adc0, adc1, gain0, gain1, ped0, ped1 in zip(adcs[0], adcs[1], gains0,gains1, peds0, peds1) ]
-
-    return np.array(calibrated)
 
 
 if __name__ == '__main__':
@@ -60,21 +46,20 @@ if __name__ == '__main__':
     filenamelist_gamma  = glob( "{}/gamma/run*{}.simtel.gz".format(args.indir,args.runnr ))
     filenamelist_proton = [] #glob( "{}/proton/run{}.*gz".format(args.indir,args.runnr ))
 
-    print(  "{}/gamma/run*{}.simtel.gz".format(args.indir,args.runnr ))
+    print("{}/gamma/run*{}.simtel.gz".format(args.indir, args.runnr))
     if len(filenamelist_gamma) == 0:
         print("no gammas found")
         exit()
 
     allowed_tels = set(range(10))
-    if args.tel: allowed_tels = allowed_tels & set([args.tel])
+    #if args.tel: allowed_tels = allowed_tels & set([args.tel])
 
-    adc_cal0  = []
-    adc_cal1  = []
-    residual0 = []
-    residual1 = []
+    npe = []
+    adc_cal  = []
+    residual = []
 
-
-    for filename in chain(sorted(filenamelist_gamma)[:], sorted(filenamelist_proton)[:]):
+    for filename in chain(sorted(filenamelist_gamma)[:],
+                          sorted(filenamelist_proton)[:]):
         print("filename = {}".format(filename))
 
         source = hessio_event_source(filename,
@@ -84,23 +69,39 @@ if __name__ == '__main__':
         for event in source:
             tels = set(event.trig.tels_with_trigger) & set(event.dl0.tels_with_data)
             for tel_id in tels:
-                dat0 = apply_mc_calibration_ASTRI(event.dl0.tel[tel_id].adc_sums, tel_id,0)
-                dat1 = apply_mc_calibration_ASTRI(event.dl0.tel[tel_id].adc_sums, tel_id,1)
+                cal = apply_mc_calibration_ASTRI(
+                                        event.dl0.tel[tel_id].adc_sums,
+                                        event.mc.tel[tel_id].dc_to_pe,
+                                        event.mc.tel[tel_id].pedestal)
+                print(np.sum(event.dl0.tel[tel_id].adc_sums[0]))
+                print(np.sum(event.dl0.tel[tel_id].adc_sums[1]))
+                print()
+                MoCa = event.mc.tel[tel_id].photo_electron_image
 
-                MoCa = event.mc.tel[tel_id].photo_electrons
-
-                adc_cal0 .append( dat0[0] )
-                adc_cal1 .append( dat1[0] )
-                residual0.append( adc_cal0[-1] - MoCa[0] )
-                residual1.append( adc_cal1[-1] - MoCa[0] )
+                for i, pe in enumerate(MoCa):
+                    if pe > 0:
+                        npe.append(pe)
+                        #if cal[i] < -500:
+                            #print(pe)
+                            #print(cal[i])
+                            #print()
+                        adc_cal .append(cal[i])
+                        residual.append(cal[i] - npe)
             if stop: break
         if stop: break
 
     fig = plt.figure()
 
-    bins = np.linspace(-5, 10, 75)
+    fig.add_subplot(221)
+    plt.hist(npe)
 
-    plt.hist(residual0,bins, alpha=0.5, label='corrected calibration')
-    plt.hist(residual1,bins, alpha=0.5, label='mixed calibration')
+    fig.add_subplot(224)
+    plt.hist(adc_cal)
+
+    fig.add_subplot(222)
+    bins = np.linspace(-5, 35, 160)
+    plt.hist(residual, bins, alpha=0.5, label='corrected calibration')
     plt.legend(loc='upper right')
+
+
     plt.show()

@@ -143,17 +143,17 @@ def get_subplot(hist, x, y=None, clip_outliers=True):
     f = +1 if clip_outliers else 0
     l = -1 if clip_outliers else None
 
-    # remove all axes before either of the two we look at
+    # sum all axes before either of the two we look at
     for i in range(min(x, y)):
         a = a[f:l, ...].sum(axis=0)
         b = b[f:l, ...].sum(axis=0)
 
-    # remove all axes between the two we look at
+    # sum all axes between the two we look at
     for i in range(abs(x-y)-1):
         a = a[:, f:l, ...].sum(axis=1)
         b = b[:, f:l, ...].sum(axis=1)
 
-    # remove all axes beyond either of the two we look at
+    # sum all axes beyond either of the two we look at
     for i in range(dim-max(x, y)-1):
         a = a[..., f:l].sum(axis=-1)
         b = b[..., f:l].sum(axis=-1)

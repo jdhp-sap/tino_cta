@@ -1,16 +1,16 @@
-from os.path import expandvars
-
+import matplotlib.pyplot as plt
 import numpy as np
 
-from astropy import units as u
-
-from matplotlib import pyplot as plt
+# plt.style.use('seaborn-talk')
+# plt.style.use('t_slides')
 
 import signal
 class SignalHandler():
     ''' handles ctrl+c signals; set up via
         signal_handler = SignalHandler()
         signal.signal(signal.SIGINT, signal_handler)
+        # or for two step interupt:
+        signal.signal(signal.SIGINT, signal_handler.stop_drawing)
     '''
     def __init__(self):
         self.stop = False
@@ -39,20 +39,15 @@ class SignalHandler():
             self.stop = True
 
 
-def apply_mc_calibration_ASTRI(adcs, gains, peds, mode=0, adc_tresh=3500):
+def apply_mc_calibration_ASTRI(adcs, gains, peds, adc_tresh=3500):
     """
     apply basic calibration for ASTRI telescopes with two gains
     """
-    gains0 = gains[0]
-    gains1 = gains[1]
-
-    peds0 = peds[0]
-    peds1 = peds[1]
 
     calibrated = [(adc0-ped0)*gain0 if adc0 < adc_tresh
-                    else (adc1-ped1)*gain1
-                    for adc0, adc1, gain0, gain1, ped0, ped1
-                    in zip(adcs[0], adcs[1], gains0, gains1, peds0, peds1)]
+                  else (adc1-ped1)*gain1
+                  for adc0, adc1, gain0, gain1, ped0, ped1
+                  in zip(*adcs, *gains, *peds)]
 
     return np.array(calibrated)
 
@@ -72,47 +67,61 @@ def apply_mc_calibration(adcs, gains, peds):
 def convert_astropy_array(arr, unit=None):
     if unit is None:
         unit = arr[0].unit
-        return (np.array([a.to(unit).value for a in arr])*unit).si
-    else:
-        return np.array([a.to(unit).value for a in arr])*unit
+    return np.array([a.to(unit).value for a in arr])*unit
 
 
-import argparse
 def make_argparser():
-    parser = argparse.ArgumentParser(description='show single telescope')
+    from os.path import expandvars
+    import argparse
+    parser = argparse.ArgumentParser(description='')
     parser.add_argument('-m', '--max_events', type=int, default=None,
                         help="maximum number of events considered per file")
     parser.add_argument('-c', '--min_charge', type=int, default=0,
                         help="minimum charge per telescope after cleaning")
     parser.add_argument('-i', '--indir',   type=str,
                         default=expandvars("$HOME/Data/cta/ASTRI9/"))
-    parser.add_argument('-r', '--runnr',   type=str, default="*")
+                        # default="/media/tmichael/Transcend/Data/cta/ASTRI9/")
+    parser.add_argument('-f', '--infile_list',   type=str, default="", nargs='*',
+                        help="give a specific list of files to run on")
+    parser.add_argument('--plots_dir', type=str, default="plots",
+                        help="path to store plots")
     parser.add_argument('--tail', dest="mode", action='store_const',
                         const="tail", default="wave",
                         help="if set, use tail cleaning, otherwise wavelets")
     parser.add_argument('--dilate', default=False, action='store_true',
                         help="use dilate function for tailcut cleaning")
+    parser.add_argument('--no_reject_edge', dest='skip_edge_events', default=True,
+                        action='store_false', help="do not reject edge events")
     parser.add_argument('-w', '--write', action='store_true',
-                        help="write output -- e.g. plots, classifiers, events")
+                        help="write summary-level output -- e.g. plots, tables")
+    parser.add_argument('--store', action='store_true',
+                        help="write event data / trained classifier")
     parser.add_argument('-p', '--plot',  action='store_true',
                         help="do some plotting")
+    parser.add_argument('-v', '--verbose',  action='store_true',
+                        help="do things more explicit -- plotting, logging etc.")
     parser.add_argument('-d', '--dry', dest='last', action='store_const',
                         const=1, default=None,
                         help="only consider first file per type")
+    parser.add_argument('--raw', type=str, default=None,
+                        help="raw option string for wavelet filtering")
     return parser
 
 
 try:
     from matplotlib2tikz import save as tikzsave
+
+    def tikz_save(arg, **kwargs):
+        tikzsave(arg, **kwargs,
+                 figureheight='\\figureheight',
+                 figurewidth='\\figurewidth')
 except:
     print("matplotlib2tikz is not installed")
+    print("install with: \n$ pip install matplotlib2tikz")
 
-def tikz_save(arg, **kwargs):
-    try:
-        tikzsave(arg, figureheight = '\\figureheight',
-                      figurewidth  = '\\figurewidth', **kwargs)
-    except:
+    def tikz_save(arg, **kwargs):
         print("matplotlib2tikz is not installed")
+        print("no .tex is saved")
 
 
 def save_fig(outname, endings=["tex", "pdf", "png"], **kwargs):
@@ -120,111 +129,48 @@ def save_fig(outname, endings=["tex", "pdf", "png"], **kwargs):
         if end == "tex":
             tikz_save("{}.{}".format(outname, end), **kwargs)
         else:
-            ptl.savefig("{}.{}".format(outname, end))
+            plt.savefig("{}.{}".format(outname, end))
 
 
-def make_mock_event_rate(spectra, bin_edges=None, Emin=None, Emax=None,
-                         E_unit=u.GeV, NBins=None, logE=True, norm=None):
-
-    rates = [[] for f in spectra]
-
-    if bin_edges is None:
-        if logE:
-            Emin = np.log10(Emin/E_unit)
-            Emax = np.log10(Emax/E_unit)
-        bin_edges = np.linspace(Emin, Emax, NBins+1, True)
-
-    for l_edge, h_edge in zip(bin_edges[:-1], bin_edges[1:]):
-        if logE:
-            bin_centre = 10**((l_edge+h_edge)/2.) * E_unit
-            bin_width = (10**h_edge-10**l_edge)*E_unit
-
-        else:
-            bin_centre = (l_edge+h_edge) * E_unit / 2.
-            bin_width = (h_edge-l_edge)*E_unit
-        for i, spectrum in enumerate(spectra):
-            bin_events = spectrum(bin_centre) * bin_width
-            rates[i].append(bin_events)
-
-    for i, rate in enumerate(rates):
-        rate = convert_astropy_array(rate)
-        if norm:
-            rate *= norm[i]/np.sum(rate)
-        rates[i] = rate
-
-    return (*rates), bin_edges
-
-# ================================== #
-# Compute Eq. (17) of Li & Ma (1983) #
-# ================================== #
-def sigma_lima(Non, Noff, alpha=0.2):
-    """
-    Compute Eq. (17) of Li & Ma (1983).
-
-    Parameters:
-     Non   - Number of on counts
-     Noff  - Number of off counts
-    Keywords:
-     alpha - Ratio of on-to-off exposure
-    """
-
-    alpha1 = alpha + 1.0
-    sum    = Non + Noff
-    arg1   = Non / sum
-    arg2   = Noff / sum
-    term1  = Non  * np.log((alpha1/alpha)*arg1)
-    term2  = Noff * np.log(alpha1*arg2)
-    sigma  = np.sqrt(2.0 * (term1 + term2))
-
-    return sigma
-
-
-
-
-def plot_hex_and_violin(abscissa, ordinate, bin_edges, extent=None, vmin=None, vmax=None,
-                         xlabel="", ylabel="", zlabel="", do_hex=True, do_violin=True,
-                         cm=plt.cm.hot, **kwargs):
+def plot_hex_and_violin(abscissa, ordinate, bin_edges, extent=None,
+                        xlabel="", ylabel="", zlabel="", do_hex=True, do_violin=True,
+                        cm=plt.cm.inferno, **kwargs):
 
     """
     takes two arrays of coordinates and creates a 2D hexbin plot and a violin plot (or
     just one of them)
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     abscissa, ordinate : arrays
         the coordinates of the data to plot
     bin_edges : array
         bin edges along the abscissa
     extent : 4-tuple of floats (default: None)
         extension of the abscissa, ordinate; given as is to plt.hexbin
-    vmin, vmax : floats (defaults: None)
-        lower and upper caps of the bin values to be plotted in plt.hexbin
     xlabel, ylabel : strings (defaults: "")
         labels for the two axes of either plot
     zlabel : string (default: "")
         label for the colorbar of the hexbin plot
     do_hex, do_violin : bools (defaults: True)
         whether or not to do the respective plots
-    cm : colour map (default: plt.cm.hot)
+    cm : colour map (default: plt.cm.inferno)
         colour map to be used for the hexbin plot
     kwargs : args dictionary
         more arguments to be passed to plt.hexbin
     """
 
-
     plt.figure()
 
-    ''' make a normal 2D hexplot from the given data '''
+    # make a normal 2D hexplot from the given data
     if do_hex:
 
-        ''' if we do both plot types, open a subplot '''
+        # if we do both plot types, open a subplot
         if do_violin:
             plt.subplot(211)
 
         plt.hexbin(abscissa,
                    ordinate,
-                   vmin=vmin,
-                   vmax=vmax,
                    gridsize=40,
                    extent=extent,
                    cmap=cm,
@@ -233,26 +179,28 @@ def plot_hex_and_violin(abscissa, ordinate, bin_edges, extent=None, vmin=None, v
         cb.set_label(zlabel)
         plt.xlabel(xlabel)
         plt.ylabel(ylabel)
+        if extent:
+            plt.xlim(extent[:2])
+            plt.ylim(extent[2:])
 
-    ''' prepare and draw the data for the violin plot '''
+    # prepare and draw the data for the violin plot
     if do_violin:
 
-        ''' if we do both plot types, open a subplot '''
+        # if we do both plot types, open a subplot
         if do_hex:
             plt.subplot(212)
 
-        '''
-        to plot the violins, sort the ordinate values into a dictionary
-        the keys are the central values of the bins given by @bin_edges '''
+        # to plot the violins, sort the ordinate values into a dictionary
+        # the keys are the central values of the bins given by `bin_edges`
         val_vs_dep = {}
         bin_centres = (bin_edges[1:]+bin_edges[:-1])/2.
         for dep, val in zip(abscissa, ordinate):
-            ''' get the bin number this event belongs into '''
-            ibin = np.clip(
-                        np.digitize(dep, bin_edges)-1,
-                        0, len(bin_centres)-1)
+            # get the bin number this event belongs into
+            # outliers are put into the first and last bin accordingly
+            ibin = np.clip(np.digitize(dep, bin_edges)-1,
+                           0, len(bin_centres)-1)
 
-            ''' the central value of the bin is the key for the dictionary '''
+            # the central value of the bin is the key for the dictionary
             if bin_centres[ibin] not in val_vs_dep:
                 val_vs_dep[bin_centres[ibin]]  = [val]
             else:
@@ -261,25 +209,29 @@ def plot_hex_and_violin(abscissa, ordinate, bin_edges, extent=None, vmin=None, v
         vals = [a for a in val_vs_dep.values()]
         keys = [a for a in val_vs_dep.keys()]
 
-        '''
-        calculate the widths of the violins as 90 % of the corresponding bin width '''
-        widths=[]
+        # calculate the widths of the violins as 90 % of the corresponding bin width
+        widths = []
         for cen, wid in zip(bin_centres, (bin_edges[1:]-bin_edges[:-1])):
             if cen in keys:
                 widths.append(wid*.9)
 
-
         plt.violinplot(vals, keys,
                        points=60, widths=widths,
-                       showextrema=True, showmedians=True)
+                       showextrema=False, showmedians=True)
         plt.xlabel(xlabel)
         plt.ylabel(ylabel)
-        ''' adding a colour bar to tex hexbin plot reduces its total width to 4/5
-        adjusting the extent of the violin plot to sync up with the hexbin plot '''
-        if not np.isnan(extent[:2]).any():
+
+        if extent:
+            # adding a colour bar to the hexbin plot reduces its width by 1/5
+            # adjusting the extent of the violin plot to sync up with the hexbin plot
             plt.xlim([extent[0], (5.*extent[1] - extent[0])/4.])
-        ''' for good measure also sync the vertical extent '''
-        if not np.isnan(extent[2:]).any():
+            # for good measure also sync the vertical extent
             plt.ylim(extent[2:])
+
         plt.grid()
 
+
+def ipython_shell():
+    # doesn't actually work, needs to be put inline, here only as a reminder
+    from IPython import embed
+    embed()
