@@ -10,11 +10,6 @@ ls -lh
 export PATH=./:$PATH
 export LD_LIBRARY_PATH=./:$LD_LIBRARY_PATH
 
-# sourcing the ctapipe miniconda environment
-export MINICONDA=/cvmfs/cta.in2p3.fr/software/miniconda
-export PATH=$MINICONDA/bin:$PATH
-source $MINICONDA/bin/activate ctapipe_v0.4
-
 
 echo '$PATH'
 echo $PATH
@@ -23,17 +18,14 @@ echo $LD_LIBRARY_PATH
 echo '$PYTHONPATH'
 echo $PYTHONPATH
 
-echo 'which python'
-which python
-
-# if the mr_filter executable is copied from the GRID storage, it is not marked as
-# "executable" -- fix this here
-chmod +x mr_filter
 
 # prevent matplotlib to complain about missing backends
 export MPLBACKEND=Agg
 
 MYHOME=$PWD
+
+export COMPILE_CFITSIO=1
+export COMPILE_SPARSE=1
 
 # getting and compiling cfitsio on site
 if [ $COMPILE_CFITSIO ]  # this won't run unless we define the variable
@@ -95,17 +87,6 @@ then
     cp $ISAP/cxx/sparse2d/bin/mr_filter $MYHOME
 fi
 
-echo
-date
-echo
-
-# executing the script that we intend to run
-echo calling: 'python $@'
-python $@
-
-echo
-date
-echo
 
 
 echo

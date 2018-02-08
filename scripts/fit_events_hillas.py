@@ -13,43 +13,55 @@ from astropy import units as u
 try:
     import tables as tb
 except:
+    # if pytables are not installed, build a class that mimicks the interface but
+    # immediately throws an exception that we can catch. this way, we get still thrown
+    # off by e.g. naming errors but not by a missing "reco_event"
+    class NoPyTError(Exception):
+        pass
+
+    class RecoEvent(dict):
+        def __setitem__(self, foo, bar):
+            raise NoPyTError
     print("no pytables installed")
 
-from ctapipe.instrument.camera import CameraGeometry
 from ctapipe.io.hessio import hessio_event_source
 
 from ctapipe.utils import linalg
+from ctapipe.utils.CutFlow import CutFlow
 
 from ctapipe.image.hillas import HillasParameterizationError, \
                                  hillas_parameters_4 as hillas_parameters
 
 from ctapipe.reco.HillasReconstructor import \
-    HillasReconstructor, TooFewTelescopesException
+    HillasReconstructor, TooFewTelescopes
+from ctapipe.reco.shower_max import ShowerMaxEstimator
 
+from ctapipe.coordinates.coordinate_transformations import az_to_phi, alt_to_theta
 
-from modules.ImageCleaning import ImageCleaner, EdgeEventException
-from modules.CutFlow import CutFlow
+from modules.ImageCleaning import ImageCleaner
+
+from modules.prepare_event import EventPreparer
 
 from helper_functions import *
-
-from collections import OrderedDict
 
 
 def main():
 
     # your favourite units here
-    energy_unit = u.GeV
+    energy_unit = u.TeV
     angle_unit = u.deg
     dist_unit = u.m
 
     parser = make_argparser()
     parser.add_argument('--events_dir', type=str, default="data/reconstructed_events")
     parser.add_argument('-o', '--out_file', type=str, default="rec_events")
-    parser.add_argument('--photon',  action='store_true',
-                        help="use the mc photo-electrons container "
-                        "instead of the PMT signal")
-    parser.add_argument('--proton',  action='store_true',
-                        help="do protons instead of gammas")
+    parser.add_argument('--plot_c',  action='store_true',
+                        help="plot camera-wise displays")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--proton',  action='store_true',
+                       help="do protons instead of gammas")
+    group.add_argument('--electron',  action='store_true',
+                       help="do electrons instead of gammas")
 
     args = parser.parse_args()
 
@@ -59,6 +71,8 @@ def main():
             filenamelist += glob("{}/{}".format(args.indir, f))
     elif args.proton:
         filenamelist = glob("{}/proton/*gz".format(args.indir))
+    elif args.electron:
+        filenamelist = glob("{}/electron/*gz".format(args.indir))
     else:
         filenamelist = glob("{}/gamma/*gz".format(args.indir))
     filenamelist.sort()
@@ -67,34 +81,31 @@ def main():
         print("no files found; check indir: {}".format(args.indir))
         exit(-1)
 
-    cam_geom = {}
     tel_phi = {}
     tel_theta = {}
-    tel_orientation = (tel_phi, tel_theta)
 
     # keeping track of events and where they were rejected
     Eventcutflow = CutFlow("EventCutFlow")
     Imagecutflow = CutFlow("ImageCutFlow")
 
-    Eventcutflow.set_cuts(OrderedDict([
-                            ("noCuts", None),
-                            ("min2Tels", lambda x: x < 2),
-                            ("min2Images", lambda x: x < 2),
-                            ("GreatCircles", None),
-                            ("nan pos", lambda x: np.isnan(x.value).any()),
-                            ("nan dir", lambda x: np.isnan(x.value).any())])
-                         )
-
-    min_charge_string = "min charge >= {}".format(args.min_charge)
-    Imagecutflow.set_cut(min_charge_string, lambda x: x < args.min_charge)
-
     # takes care of image cleaning
-    Cleaner = ImageCleaner(mode=args.mode, cutflow=Imagecutflow,
+    cleaner = ImageCleaner(mode=args.mode, cutflow=Imagecutflow,
                            wavelet_options=args.raw,
-                           skip_edge_events=False, island_cleaning=True)
+                           skip_edge_events=args.skip_edge_events, island_cleaning=True)
 
     # the class that does the shower reconstruction
-    fit = HillasReconstructor()
+    shower_reco = HillasReconstructor()
+
+    shower_max_estimator = ShowerMaxEstimator("paranal")
+
+    preper = EventPreparer(cleaner=cleaner,
+                           hillas_parameters=hillas_parameters, shower_reco=shower_reco,
+                           event_cutflow=Eventcutflow, image_cutflow=Imagecutflow,
+                           # event/image cuts:
+                           allowed_cam_ids=[],  # means: all
+                           min_ntel=3,
+                           min_charge=args.min_charge,
+                           min_pixel=3)
 
     # a signal handler to abort the event loop but still do the post-processing
     signal_handler = SignalHandler()
@@ -109,6 +120,8 @@ def main():
             xi = tb.Float32Col(dflt=1, pos=3)
             DeltaR = tb.Float32Col(dflt=1, pos=4)
             ErrEstPos = tb.Float32Col(dflt=1, pos=5)
+            ErrEstDir = tb.Float32Col(dflt=1, pos=6)
+            h_max = tb.Float32Col(dflt=1, pos=7)
 
         channel = "gamma" if "gamma" in " ".join(filenamelist) else "proton"
         if args.out_file:
@@ -123,167 +136,153 @@ def main():
         reco_table = reco_outfile.create_table("/", "reco_event", RecoEvent)
         reco_event = reco_table.row
     except:
+        reco_event = RecoEvent()
         print("no pytables installed?")
+
+    # ##        #######   #######  ########
+    # ##       ##     ## ##     ## ##     ##
+    # ##       ##     ## ##     ## ##     ##
+    # ##       ##     ## ##     ## ########
+    # ##       ##     ## ##     ## ##
+    # ##       ##     ## ##     ## ##
+    # ########  #######   #######  ##
+
+    cam_id_map = {}
 
     # define here which telescopes to loop over
     allowed_tels = None
-    allowed_tels = range(10)  # smallest 3×3 square of ASTRI telescopes
-    # allowed_tels = range(34)  # all ASTRI telescopes
-    # allowed_tels = range(34, 40)  # use the array of FlashCams instead
-    # allowed_tels = np.arange(10).tolist() + np.arange(34, 41).tolist()
-    for filename in sorted(filenamelist)[:5]:  # args.last]:
-
-        print("filename = {}".format(filename))
+    # allowed_tels = prod3b_tel_ids("L+F+D")
+    for i, filename in enumerate(filenamelist[:args.last]):
+        print(f"file: {i} filename = {filename}")
 
         source = hessio_event_source(filename,
                                      allowed_tels=allowed_tels,
                                      max_events=args.max_events)
 
-        for event in source:
-
-            Eventcutflow.count("noCuts")
-
-            if Eventcutflow.cut("min2Tels", len(event.dl0.tels_with_data)):
-                continue
-
-            print('Scanning input file... count = {}'.format(event.count))
-            print('Event ID: {}'.format(event.dl0.event_id))
-            print('Available telscopes: {}'.format(event.dl0.tels_with_data))
-
-            hillas_dict = {}
-            for tel_id in event.dl0.tels_with_data:
-
-                Imagecutflow.count("noCuts")
-
-                if tel_id not in cam_geom:
-                    cam_geom[tel_id] = CameraGeometry.guess(
-                                        event.inst.pixel_pos[tel_id][0],
-                                        event.inst.pixel_pos[tel_id][1],
-                                        event.inst.optical_foclen[tel_id])
-                    tel_phi[tel_id] = event.mc.tel[tel_id].azimuth_raw * u.rad
-                    tel_theta[tel_id] = (np.pi/2-event.mc.tel[tel_id].altitude_raw)*u.rad
-
-                if args.photon:
-                    pmt_signal = event.mc.tel[tel_id].photo_electron_image
-                    new_geom = cam_geom[tel_id]
-                else:
-                    if cam_geom[tel_id].cam_id == "ASTRI":
-                        cal_signal = apply_mc_calibration_ASTRI(
-                                        event.r0.tel[tel_id].adc_sums,
-                                        event.mc.tel[tel_id].dc_to_pe,
-                                        event.mc.tel[tel_id].pedestal)
-                    else:
-                        cal_signal = apply_mc_calibration(
-                            event.r0.tel[tel_id].adc_sums[0],
-                            event.mc.tel[tel_id].dc_to_pe[0],
-                            event.mc.tel[tel_id].pedestal[0])
-
-                    Imagecutflow.count("calibration")
-
-                    try:
-                        pmt_signal, new_geom = \
-                            Cleaner.clean(cal_signal, cam_geom[tel_id])
-                    except (FileNotFoundError, EdgeEventException) as e:
-                        continue
-                # end if args.photons
-
-                if Imagecutflow.cut(min_charge_string, np.sum(pmt_signal)):
-                    continue
-
-                try:
-                    h = hillas_parameters(new_geom.pix_x,
-                                          new_geom.pix_y,
-                                          pmt_signal)
-                    if h.length > 0 and h.width > 0:
-                        hillas_dict[tel_id] = h
-                except HillasParameterizationError as e:
-                    print(e)
-                    continue
-
-                Imagecutflow.count("Hillas")
-
-            if Eventcutflow.cut("min2Images", len(hillas_dict)):
-                continue
-
-            fit.get_great_circles(hillas_dict, event.inst, *tel_orientation)
-
-            Eventcutflow.count("GreatCircles")
+        # loop that cleans and parametrises the images and performs the reconstruction
+        for (event, hillas_dict, n_tels,
+             tot_signal, max_signal, pos_fit, dir_fit, h_max,
+             err_est_pos, err_est_dir) in preper.prepare_event(source):
 
             shower = event.mc
-            shower_org = linalg.set_phi_theta(shower.az, 90.*u.deg-shower.alt)
 
+            org_alt = u.Quantity(shower.alt).to(u.deg)
+            org_az = u.Quantity(shower.az).to(u.deg)
+            if org_az > 180*u.deg:
+                org_az -= 360*u.deg
+
+            org_the = alt_to_theta(org_alt)
+            org_phi = az_to_phi(org_az)
+            if org_phi > 180*u.deg:
+                org_phi -= 360*u.deg
+            if org_phi < -180*u.deg:
+                org_phi += 360*u.deg
+
+            shower_org = linalg.set_phi_theta(org_phi, org_the)
             shower_core = convert_astropy_array([shower.core_x, shower.core_y])
 
-            try:
-                fit_position, err_est_dist = fit.fit_core_crosses()
-            except Exception as e:
-                print([c.norm for c in fit.circles.values()])
-                raise e
-            if Eventcutflow.cut("nan pos", fit_position):
-                continue
+            xi = linalg.angle(dir_fit, shower_org).to(angle_unit)
+            diff = linalg.length(pos_fit[:2]-shower_core)
 
-            fit_origin = fit.fit_origin_crosses()[0]
-            if Eventcutflow.cut("nan dir", fit_origin):
-                continue
-
-            xi = linalg.angle(fit_origin, shower_org).to(angle_unit)
-            diff = linalg.length(fit_position[:2]-shower_core)
+            # print some performance
+            print()
+            print("xi = {:4.3f}".format(xi))
+            print("pos = {:4.3f}".format(diff))
+            print("h_max reco: {:4.3f}".format(h_max.to(u.km)))
+            print("err_est_dir: {:4.3f}".format(err_est_dir.to(angle_unit)))
+            print("err_est_pos: {:4.3f}".format(err_est_pos))
 
             try:
                 # store the reconstruction data in the PyTable
-                reco_event["NTels_trigg"] = len(event.dl0.tels_with_data)
-                reco_event["NTels_clean"] = len(fit.circles)
+                reco_event["NTels_trigg"] = n_tels["tot"]
+                reco_event["NTels_clean"] = len(shower_reco.circles)
                 reco_event["EnMC"] = event.mc.energy / energy_unit
                 reco_event["xi"] = xi / angle_unit
                 reco_event["DeltaR"] = diff / dist_unit
-                reco_event["ErrEstPos"] = err_est_dist / dist_unit
+                reco_event["ErrEstPos"] = err_est_pos / dist_unit
+                reco_event["ErrEstDir"] = err_est_dir / angle_unit
+                reco_event["h_max"] = h_max / dist_unit
                 reco_event.append()
                 reco_table.flush()
-
-                # print some performance
-                print()
-                print("xi = {:4.3f}".format(xi))
-                print("pos = {:4.3f}".format(diff))
-                print("err_est_dist: {:4.3f}".format(err_est_dist))
 
                 print()
                 print("xi res (68-percentile) = {:4.3f} {}"
                       .format(np.percentile(reco_table.cols.xi, 68), angle_unit))
                 print("core res (68-percentile) = {:4.3f} {}"
                       .format(np.percentile(reco_table.cols.DeltaR, 68), dist_unit))
-                print()
-            except:
+                print("h_max (median) = {:4.3f} {}"
+                      .format(np.percentile(reco_table.cols.h_max, 50), dist_unit))
+
+            except NoPyTError:
                 pass
 
-            # this plots
-            # • the MC shower core
-            # • the reconstructed shower core
-            # • the used telescopes
-            # • and the trace of the Hillas plane on the ground
-            if False:
+            if args.plot_c:
+                from mpl_toolkits.mplot3d import Axes3D
+                fig = plt.figure()
+                ax = fig.gca(projection='3d')
+                for c in shower_reco.circles.values():
+                    points = [c.pos + t * c.a * u.km for t in np.linspace(0, 15, 3)]
+                    ax.plot(*np.array(points).T, linewidth=np.sqrt(c.weight)/10)
+                    ax.scatter(*c.pos[:, None].value, s=np.sqrt(c.weight))
+                plt.xlabel("x")
+                plt.ylabel("y")
+                plt.pause(.1)
+
+                # this plots
+                # • the MC shower core
+                # • the reconstructed shower core
+                # • the used telescopes
+                # • and the trace of the Hillas plane on the ground
                 plt.figure()
-                for c in fit.circles.values():
-                    plt.scatter(c.pos[0], c.pos[1], c="g", s=c.weight)
+                for tel_id, c in shower_reco.circles.items():
+                    plt.scatter(c.pos[0], c.pos[1], s=np.sqrt(c.weight))
+                    plt.gca().annotate(tel_id, (c.pos[0].value, c.pos[1].value))
                     plt.plot([c.pos[0].value-500*c.norm[1], c.pos[0].value+500*c.norm[1]],
-                             [c.pos[1].value+500*c.norm[0], c.pos[1].value-500*c.norm[0]])
-                plt.scatter(*fit_position[:2], c="r")
-                plt.scatter(*shower_core[:2], c="b")
-                plt.xlim(-400, 400)
-                plt.ylim(-400, 400)
+                             [c.pos[1].value+500*c.norm[0], c.pos[1].value-500*c.norm[0]],
+                             linewidth=np.sqrt(c.weight)/10)
+                plt.scatter(*pos_fit[:2], c="black", marker="*", label="fitted")
+                plt.scatter(*shower_core[:2], c="black", marker="P", label="MC")
+                plt.legend()
+                plt.xlabel("x")
+                plt.ylabel("y")
+                plt.xlim(-1400, 1400)
+                plt.ylim(-1400, 1400)
                 plt.show()
 
             if signal_handler.stop: break
         if signal_handler.stop: break
 
+    print("\n" + "="*35 + "\n")
+    print("xi res (68-percentile) = {:4.3f} {}"
+          .format(np.percentile(reco_table.cols.xi, 68), angle_unit))
+    print("core res (68-percentile) = {:4.3f} {}"
+          .format(np.percentile(reco_table.cols.DeltaR, 68), dist_unit))
+    print("h_max (median) = {:4.3f} {}"
+          .format(np.percentile(reco_table.cols.h_max, 50), dist_unit))
+
     # print the cutflows for telescopes and camera images
-    print()
-    Eventcutflow("min2Tels")
+    print("\n\n")
+    Eventcutflow("min2Tels trig")
     print()
     Imagecutflow(sort_column=1)
 
     # if we don't want to plot anything, we can exit now
     if not args.plot:
-        exit(0)
+        return
+
+    # ########  ##        #######  ########  ######
+    # ##     ## ##       ##     ##    ##    ##    ##
+    # ##     ## ##       ##     ##    ##    ##
+    # ########  ##       ##     ##    ##     ######
+    # ##        ##       ##     ##    ##          ##
+    # ##        ##       ##     ##    ##    ##    ##
+    # ##        ########  #######     ##     ######
+
+    plt.figure()
+    plt.hist(reco_table.cols.h_max, bins=np.linspace(000, 15000, 51, True))
+    plt.title(channel)
+    plt.xlabel("h_max reco")
+    plt.pause(.1)
 
     figure = plt.figure()
     xi_edges = np.linspace(0, 5, 20)
@@ -291,6 +290,19 @@ def main():
     plt.xlabel(r"$\xi$ / deg")
     if args.write:
         save_fig('{}/reco_xi_{}'.format(args.plots_dir, args.mode))
+    plt.pause(.1)
+
+    plt.figure()
+    plt.hist(reco_table.cols.ErrEstDir[:],
+             bins=np.linspace(0, 20, 50))
+    plt.title(channel)
+    plt.xlabel("beta")
+    plt.pause(.1)
+
+    plt.figure()
+    plt.hist(np.log10(reco_table.cols.xi[:] / reco_table.cols.ErrEstDir[:]), bins=50)
+    plt.title(channel)
+    plt.xlabel("log_10(xi / beta)")
     plt.pause(.1)
 
     # convert the xi-list into a dict with the number of used telescopes as keys
@@ -302,7 +314,7 @@ def main():
             xi_vs_tel[ntel].append(xi)
 
     print(args.mode)
-    for ntel, xis in xi_vs_tel.items():
+    for ntel, xis in sorted(xi_vs_tel.items()):
         print("NTel: {} -- median xi: {}".format(ntel, np.median(xis)))
         # print("histogram:", np.histogram(xis, bins=xi_edges))
 

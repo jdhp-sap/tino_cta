@@ -1,9 +1,15 @@
+# the makefile rsyncs to CC Lyon... don't put it in the repository...
+Makefile
+
 *.kdev4
 *.fits
 *.log
 *~
+*h5
+
 data
 plots
+models
 
 __pycache__
 .cache
@@ -14,10 +20,6 @@ __pycache__
 datapipe.tar.gz
 modules.tar.gz
 
-# hard-linked file from Jeremie's repo to more easily upload it to the GIRD
-extract_and_crop_simtel_images.py
-# a reminder file so I don't delete the .py
-extract_and_crop_simtel_images.txt
 
 # downloaded OutputSandbox
 # (directory name is the run ID, which starts with 12 atm)
@@ -25,3 +27,10 @@ extract_and_crop_simtel_images.txt
 
 # file lists on the GRID storage system
 vo.*
+
+
+# jupyter checkpoints
+.ipynb_checkpoints/
+
+# module egg...
+*.egg-info

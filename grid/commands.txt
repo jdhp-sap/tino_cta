@@ -1,0 +1,34 @@
+# storae elements
+CC-IN2P3-USER
+DESY-ZN-USER
+CEA-USER
+LAPP-USER
+CYF-STORM-USER
+CNAF-USER
+LPNHE-USER
+
+# Retrieve a list of files
+dirac-dms-user-lfns
+
+# upload a file
+dirac-dms-add-file /vo.cta.in2p3.fr/user/[initial]/[username]/test.txt test.txt CC-IN2P3-USER
+
+# download a file
+dirac-dms-get-file LFN:/vo.cta.in2p3.fr/user/[initial]/[username]/dir1/job.log
+
+# remove a directory and all files within
+dirac-dms-clean-directory /vo.cta.in2p3.fr/user/[initial]/[username]/dir1
+
+# create a replica on another storage element
+dirac-dms-replicate-lfn /vo.cta.in2p3.fr/user/[initial]/[username]/test.txt DESY-ZN-Disk
+
+
+# get list of jobs with failed status
+dirac-wms-select-jobs --Owner='tmichael' --Status='Failed'
+
+# get job output
+dirac-wms-job-get-output [JobID]
+
+
+# to update dirac client, in the  dirac directory
+python dirac-install -V CTA -v
